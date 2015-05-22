@@ -24,13 +24,22 @@ def example_script():
 
   declim = 12
   declim = None
-  maglim = 13
+  maglim = 12
+  search_radius = 5.0
 
   try:
     p_dict = pickle.load(open(fname+'.p','rb'))
   except:
-    create_dict(fname,declim,maglim)
+    create_dict(fname,declim,maglim,search_radius)
     p_dict = pickle.load(open(fname+'.p','rb'))
+
+  if declim == None:
+    is_sane = [(p_dict['st_vj'] < maglim) & (p_dict['st_vj'] > 0)]
+  else:
+    is_sane = [(p_dict['dec'] < declim) & (p_dict['st_vj'] < maglim) & (p_dict['st_vj'] > 0)]
+
+  for i in range(0,len(p_dict.keys())):
+    p_dict[p_dict.keys()[i]] = p_dict[p_dict.keys()[i]][is_sane]
 
   est_ugriz(p_dict,'WASP-12 b')
 
@@ -148,7 +157,9 @@ def example_script():
 def est_ugriz(p_dict,p_name):
   print p_dict
 
-def add_new_planet(p_dict,vals):
+def add_new_planet(p_dict,vals,search_radius):
+
+  # if you don't know the planets vband magnitude, put v_j as '' and the code will find one using vizier.
 
   keys = array(['pl_name','pl_hostname','ra','dec','pl_massj','pl_radj','pl_eqt','st_rad','st_vj','st_teff','pl_orbsmax','pl_tranmid','pl_tranmiderr1','pl_tranmiderr2','pl_trandur','pl_trandurerr1','pl_trandurerr2','pl_orbper','pl_orbpererr1','pl_orbpererr2'])
   new_dict = {}
@@ -158,7 +169,15 @@ def add_new_planet(p_dict,vals):
   new_dict = calc_eqtemp(new_dict)
   for i in range(0,len(new_dict.keys())):
     new_dict[new_dict.keys()[i]] = new_dict[new_dict.keys()[i]]
-  new_dict = vizier_find_mags(new_dict)
+  new_dict = vizier_find_mags(new_dict,search_radius)
+
+  try:
+    if new_dict['st_vj'] == '':
+      new_dict['st_vj'] = new_dict['nearby_objects'][0]['Vmag'][argmin(new_dict['nearby_objects'][0]['sep'])]
+  except:
+    #err... not really sure what to do if that fails... set it to an obviously wrong value that doesn't break the code, for now.
+    new_dict['st_vj'] = 0
+ 
   new_dict = calc_signal(new_dict)
   for key in new_dict.keys():
     p_dict[key] = append(p_dict[key],new_dict[key])
@@ -179,6 +198,12 @@ def run_ephem(p_dict):
   out_end = open('planets_end','wb')
 
   tlen = 0.75
+
+  is_sane = [(p_dict['pl_tranmid'] != 0)]
+
+  for i in range(0,len(p_dict.keys())):
+    p_dict[p_dict.keys()[i]] = p_dict[p_dict.keys()[i]][is_sane]
+
 
   for i in range(0,len(p_dict['pl_name'])):
     out_start.write(p_dict['pl_name'][i] + '\n')
@@ -245,6 +270,7 @@ def kill_targets(p_dict, kill_list):
 	print 'KILLING', planet
 	for key in p_dict.keys():
 	  p_dict[key] = delete(p_dict[key],i)
+	i -= 1
       i += 1
   return p_dict
 
@@ -299,6 +325,24 @@ def print_comparisons(p_dict):
     except:
 	print 'NO MATCHES!'
 
+def print_comparisons(p_dict):
+
+  for i in range(0,len(p_dict['pl_name'])):
+    print p_dict['pl_name'][argsort(p_dict['trans_SN'])][::-1][i]
+    target = array(p_dict['nearby_objects'])[argsort(p_dict['trans_SN'])][::-1][i]
+    try:
+      for x in range (0,len(array(p_dict['nearby_objects'])[argsort(p_dict['trans_SN'])][::-1][i]['Vmag'])):
+	targ_ra = target['_RAJ2000'][x]*(pi/180.0)
+	targ_dec = target['_DEJ2000'][x]*(pi/180.0)      
+	ra = p_dict['ra'][argsort(p_dict['trans_SN'])][::-1][i]*(pi/180.0)
+	dec = p_dict['dec'][argsort(p_dict['trans_SN'])][::-1][i]*(pi/180.0)
+
+	sep = 60*(arccos(sin(targ_dec)*sin(dec) + cos(dec)*cos(targ_dec)*cos(ra - targ_ra)))*180.0/pi
+
+	print sep, target['Bmag'][x], target['Vmag'][x], target['B-V'][x]
+    except:
+	print 'NO MATCHES!'
+
 
 def print_result(p_dict):
 
@@ -310,7 +354,7 @@ def print_result(p_dict):
   sort_index = argsort(p_dict[sort_key])[::-1]
 
   for i in range(0,len(p_dict['pl_name'])):
-    print p_dict['pl_name'][sort_index[i]], round(p_dict['signal'][sort_index[i]]*1e4,2), 'x 1e-4', round(p_dict['reflect_signal'][sort_index[i]]*1e4,2), 'x 1e-4',p_dict['trans_SN'][sort_index][i],p_dict['reflect_SN'][sort_index][i]
+    print p_dict['pl_name'][sort_index[i]], round(p_dict['signal'][sort_index[i]]*1e4,2), 'x 1e-4', round(p_dict['reflect_signal'][sort_index[i]]*1e4,2), 'x 1e-4',p_dict['trans_SN'][sort_index][i],p_dict['reflect_SN'][sort_index][i],p_dict['st_vj'][sort_index][i]
 
 def print_positions(p_dict):
 
@@ -374,9 +418,9 @@ def calc_eqtemp(p_dict):
 
   return p_dict
 
-def vizier_find_mags(p_dict):
+def vizier_find_mags(p_dict,search_radius):
 
-  search_radius = "4.1m"
+  search_radius = str(search_radius)+"m"
 
   p_dict['nearby_objects'] = [[]]*len((p_dict['pl_hostname']))
 
@@ -393,6 +437,19 @@ def vizier_find_mags(p_dict):
 	out_dict[key] = array(viz_result[key].filled(999).tolist())
       print out_dict['Bmag'], out_dict['Vmag']
       out_dict['B-V'] = out_dict['Bmag'] - out_dict['Vmag']
+
+
+      search_ra = p_dict['ra'][i]*(pi/180.0)
+      search_dec = p_dict['dec'][i]*(pi/180.0)
+
+      sep_list = []
+      for x in range(0,len(out_dict['_RAJ2000'])):
+	targ_ra = out_dict['_RAJ2000'][x]*(pi/180.0)
+	targ_dec = out_dict['_DEJ2000'][x]*(pi/180.0)      
+	sep = 60*(arccos(sin(targ_dec)*sin(search_dec) + cos(search_dec)*cos(targ_dec)*cos(search_ra - targ_ra)))*180.0/pi
+	sep_list += [sep]
+      out_dict['sep'] = sep_list
+
       p_dict['nearby_objects'][i] = out_dict
     except:
       p_dict['nearby_objects'][i] = 'NO MATCHES!'
@@ -461,7 +518,7 @@ def calc_signal(p_dict):
 
   return p_dict
 
-def create_dict(fname,declim,maglim):
+def create_dict(fname,declim,maglim,search_radius):
 
   Columns= 'pl_name,pl_hostname,ra,dec,pl_massj,pl_radj,pl_eqt,st_rad,st_vj,st_teff,pl_orbsmax,pl_tranmid,pl_tranmiderr1,pl_tranmiderr2,pl_trandur,pl_trandurerr1,pl_trandurerr2,pl_orbper,pl_orbpererr1,pl_orbpererr2'
   p_dict = grab_table(Columns,Transit=True)
@@ -469,15 +526,15 @@ def create_dict(fname,declim,maglim):
   print len(p_dict['st_vj'])
 
   if declim == None:
-    is_sane = [(p_dict['st_vj'] < maglim) & (p_dict['st_vj'] > 0)]
+    is_sane = [(p_dict['st_vj'] < maglim) & (p_dict['st_vj'] > -1)]
   else:
-    is_sane = [(p_dict['dec'] < declim) & (p_dict['st_vj'] < maglim) & (p_dict['st_vj'] > 0)]
+    is_sane = [(p_dict['dec'] < declim) & (p_dict['st_vj'] < maglim) & (p_dict['st_vj'] > -1)]
 
   print len(p_dict['st_vj'][is_sane])
 
   for i in range(0,len(p_dict.keys())):
     p_dict[p_dict.keys()[i]] = p_dict[p_dict.keys()[i]][is_sane]
-  p_dict = vizier_find_mags(p_dict)
+  p_dict = vizier_find_mags(p_dict,search_radius)
   p_dict = calc_signal(p_dict)
   
   pickle.dump(p_dict, open( fname+".p", "wb" ) )

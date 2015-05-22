@@ -8,5 +8,7 @@
 """
 
 from table_queries import *
+from WASP_tables import *
+from transit_equations import *
 
 #
