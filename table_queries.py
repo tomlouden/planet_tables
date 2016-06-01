@@ -30,7 +30,8 @@ def example_script():
   try:
     p_dict = pickle.load(open(fname+'.p','rb'))
   except:
-    create_dict(fname,declim,maglim,search_radius)
+    print 'hello, about to generate a new table'
+    create_dict(fname,declim,maglim,search_radius,catalogs)
     p_dict = pickle.load(open(fname+'.p','rb'))
 
   if declim == None:
@@ -157,11 +158,11 @@ def example_script():
 def est_ugriz(p_dict,p_name):
   print p_dict
 
-def add_new_planet(p_dict,vals,search_radius):
+def add_new_planet(p_dict,vals,search_radius,catalogs):
 
   # if you don't know the planets vband magnitude, put v_j as '' and the code will find one using vizier.
 
-  keys = array(['pl_name','pl_hostname','ra','dec','pl_massj','pl_radj','pl_eqt','st_rad','st_vj','st_teff','pl_orbsmax','pl_tranmid','pl_tranmiderr1','pl_tranmiderr2','pl_trandur','pl_trandurerr1','pl_trandurerr2','pl_orbper','pl_orbpererr1','pl_orbpererr2'])
+  keys = array(['pl_name','pl_hostname','ra','dec','pl_massj','pl_radj','pl_eqt','st_rad','st_vj','st_teff','pl_orbsmax','pl_tranmid','pl_tranmiderr1','pl_tranmiderr2','pl_trandur','pl_trandurerr1','pl_trandurerr2','pl_orbper','pl_orbpererr1','pl_orbpererr2,pl_discmethod','pl_locale','pl_massjlim','pl_radjlim'])
   new_dict = {}
   for i in range(0,len(keys)):
     new_dict[keys[i]] = array([vals[i]])
@@ -169,7 +170,7 @@ def add_new_planet(p_dict,vals,search_radius):
   new_dict = calc_eqtemp(new_dict)
   for i in range(0,len(new_dict.keys())):
     new_dict[new_dict.keys()[i]] = new_dict[new_dict.keys()[i]]
-  new_dict = vizier_find_mags(new_dict,search_radius)
+  new_dict = vizier_find_mags(new_dict,search_radius,catalogs)
 
   try:
     if new_dict['st_vj'] == '':
@@ -418,11 +419,25 @@ def calc_eqtemp(p_dict):
 
   return p_dict
 
-def try_calc_seps(p_dict,i,search_radius,v):
+def try_calc_seps(p_dict,i,search_radius,v,catalogs,tol):
+
+  for j in range(0,len(catalogs['catids'])):
+    catname = catalogs['catnames'][j]
+    catid = catalogs['catids'][j]
+    result = v.query_region(coord.ICRS(ra=p_dict['ra'][i],dec=p_dict['dec'][i], unit=(u.deg,u.deg)),radius=search_radius,catalog=catname)
+    p_dict = cat_calc_seps(result,p_dict,i,catid)
+    if p_dict['nearby_objects'][i] == 'NO MATCHES!':
+      continue
+    min_sep = sort(p_dict['nearby_objects'][i]['sep'])[0]
+    if min_sep < tol:
+      break
+
+  return p_dict 
+
+def cat_calc_seps(result,p_dict,i,catid):
   try:
-    result = v.query_object(p_dict['pl_hostname'][i],catalog=['UCAC'])
-    result = v.query_region(coord.ICRS(ra=p_dict['ra'][i],dec=p_dict['dec'][i], unit=(u.deg,u.deg)),radius=search_radius,catalog=['UCAC'])
-    viz_result = result['I/322A/out']
+    print catid
+    viz_result = result[catid]
     out_dict = {}
     for key in viz_result.keys():
       out_dict[key] = array(viz_result[key].filled(999).tolist())
@@ -443,13 +458,12 @@ def try_calc_seps(p_dict,i,search_radius,v):
     p_dict['nearby_objects'][i] = out_dict
   except:
     p_dict['nearby_objects'][i] = 'NO MATCHES!'
-  return p_dict 
+  return p_dict
 
-def find_IR_mags(p_dict,search_radius=0.05,verbose=False):
+
+def find_IR_mags(p_dict,search_radius=0.083,verbose=False):
 
   search_radius = str(search_radius)+"m"
-  maxjmag = 19
-  maxj = '<'+str(maxjmag)
 
   nplanets = len(p_dict['pl_hostname'])
 
@@ -457,16 +471,24 @@ def find_IR_mags(p_dict,search_radius=0.05,verbose=False):
   p_dict['st_hj'] = (p_dict['st_vj'].copy())*0.0
   p_dict['st_kj'] = (p_dict['st_vj'].copy())*0.0
 
+#  test_name = 'HAT-P-4'
+#  index = (np.arange(0,len(p_dict['pl_hostname']))[p_dict['pl_hostname'] == test_name])[0]
+#  for i in range(index,index+2):
   for i in range(0,nplanets):
-    v = Vizier(columns=['+_r','Jmag','Hmag','Kmag'],column_filters={"Jmag":maxj})
-    result = v.query_region(coord.ICRS(ra=p_dict['ra'][i],dec=p_dict['dec'][i], unit=(u.deg,u.deg)),radius=search_radius,catalog=['2MASS'])
-    viz_result = result['II/246/out']
-
-    jmag = viz_result['Jmag'][np.argsort(viz_result['_r'])[0]]
-    hmag = viz_result['Hmag'][np.argsort(viz_result['_r'])[0]]
-    kmag = viz_result['Kmag'][np.argsort(viz_result['_r'])[0]]
 
     vmag = p_dict['st_vj'][i]
+    try:
+      v = Vizier(columns=['+_r','Jmag','Hmag','Kmag'])
+      result = v.query_region(coord.ICRS(ra=p_dict['ra'][i],dec=p_dict['dec'][i], unit=(u.deg,u.deg)),radius=search_radius,catalog=['2MASS'])
+      viz_result = result['II/246/out']
+      jmag = viz_result['Jmag'][np.argsort(viz_result['_r'])[0]]
+      hmag = viz_result['Hmag'][np.argsort(viz_result['_r'])[0]]
+      kmag = viz_result['Kmag'][np.argsort(viz_result['_r'])[0]]
+    except:
+      print 'failed to find IR magnitudes'
+      jmag = 0.0
+      hmag = 0.0
+      kmag = 0.0
 
     p_dict['st_jj'][i] = jmag
     p_dict['st_hj'][i] = hmag
@@ -481,13 +503,17 @@ def find_IR_mags(p_dict,search_radius=0.05,verbose=False):
 
   return p_dict
 
-def vizier_find_mags(p_dict,search_radius):
+def vizier_find_mags(p_dict,search_radius,catalogs,tolerance=0.5):
 
-  max_delta_m = 1
+  max_delta_m = 2
 
   search_radius = str(search_radius)+"m"
 
   p_dict['nearby_objects'] = [[]]*len((p_dict['pl_hostname']))
+ 
+#  test_name = 'HAT-P-2'
+#  index = (np.arange(0,len(p_dict['pl_hostname']))[p_dict['pl_hostname'] == test_name])[0]
+#  for i in range(index,index+1):
 
   for i in range(0,len(p_dict['pl_hostname'])):
     if p_dict['st_vj'][i] == 0:
@@ -499,20 +525,40 @@ def vizier_find_mags(p_dict,search_radius):
     print p_dict['pl_name'][i], p_dict['ra'][i], p_dict['dec'][i]
     print 100.0*i/len(p_dict['pl_hostname']),'%'
 
-    p_dict = try_calc_seps(p_dict,i,search_radius,v)
-    print 'best match', np.sort(p_dict['nearby_objects'][i]['sep'])[0]
+    p_dict = try_calc_seps(p_dict,i,search_radius,v,catalogs,tolerance)
+
+    oldmag = p_dict['st_vj'][i]
+
+    if len(p_dict['nearby_objects'][i]) == 9:
+
+      print 'best match', np.sort(p_dict['nearby_objects'][i]['sep'])[0]
+      if np.sort(p_dict['nearby_objects'][i]['sep'])[0] < tolerance:
+        newmag = p_dict['nearby_objects'][i]['Vmag'][np.argsort(p_dict['nearby_objects'][i]['sep'])[0]]
+        magchange = abs(oldmag - newmag)
+        if (magchange > 0.5) & (oldmag != 0.0) :
+          print 'rejected'
+          newmag = oldmag
+        else:
+          print 'accepted'
+      else:
+        print 'rejected'
+        newmag = oldmag
 
 #    print p_dict['nearby_objects'][i]
 #    if (p_dict['st_vj'][i] == 0) & (np.sort(p_dict['nearby_objects'][i]['sep'])[0] < 1):
-    newmag = p_dict['nearby_objects'][i]['Vmag'][np.argsort(p_dict['nearby_objects'][i]['sep'])[0]]
-    oldmag = p_dict['st_vj'][i]
-    p_dict['st_vj'][i] = newmag
-    print 'NEW MAG:',newmag,' (was ',oldmag,')'
-    maxv = '<'+str(p_dict['st_vj'][i] + max_delta_m)
-    v = Vizier(columns=['+_r','RAJ2000', 'DEJ2000','B-V', 'Vmag','Bmag'],column_filters={"Vmag":maxv})
-    p_dict = try_calc_seps(p_dict,i,search_radius,v)
+
+      if p_dict['st_vj'][i] == 0.0:
+        p_dict['st_vj'][i] = newmag
+
+      print 'NEW MAG:',newmag,' (was ',oldmag,')'
+      maxv = '<'+str(p_dict['st_vj'][i] + max_delta_m)
+      v = Vizier(columns=['+_r','RAJ2000', 'DEJ2000','B-V', 'Vmag','Bmag'],column_filters={"Vmag":maxv})
+      p_dict = try_calc_seps(p_dict,i,search_radius,v,catalogs,tolerance)
+    else:
+      print 'FAILED TO FIND ANY MATCHES'
 
     print ''
+
   return p_dict
 
 def simbad_find_mags(p_dict):
@@ -576,24 +622,39 @@ def calc_signal(p_dict):
 
   return p_dict
 
-def create_dict(fname,declim,maglim,search_radius):
+def create_dict(fname,declim,maglim,search_radius,catalogs,loadcache=False,savecache=False):
 
   Columns= 'pl_name,pl_hostname,ra,dec,pl_massj,pl_radj,pl_eqt,st_rad,st_vj,st_teff,pl_orbsmax,pl_tranmid,pl_tranmiderr1,pl_tranmiderr2,pl_trandur,pl_trandurerr1,pl_trandurerr2,pl_orbper,pl_orbpererr1,pl_orbpererr2'
-  p_dict = grab_table(Columns,Transit=True)
+
+  if loadcache == False:
+    print 'about to access NASA database'
+    p_dict = grab_table(Columns,Transit=True)
+  else:
+    print 'Loading from cache'
+    p_dict = pickle.load(open(loadcache+'.p','rb'))
+
+  if savecache != False:
+    print 'about to save cache'
+    pickle.dump(p_dict,open(savecache+'.p','wb'))
+    
+
+  print 'got table from NASA'
   p_dict = calc_eqtemp(p_dict)
   print len(p_dict['st_vj'])
 
-  if declim == None:
-    is_sane = [(p_dict['st_vj'] < maglim) & (p_dict['st_vj'] > -1)]
-  else:
-    is_sane = [(p_dict['dec'] < declim) & (p_dict['st_vj'] < maglim) & (p_dict['st_vj'] > -1)]
+#  if declim == None:
+#    is_sane = [(p_dict['st_vj'] < maglim) & (p_dict['st_vj'] > -1)]
+#  else:
+#    is_sane = [(p_dict['dec'] < declim) & (p_dict['st_vj'] < maglim) & (p_dict['st_vj'] > -1)]
 
-  print len(p_dict['st_vj'][is_sane])
+#  print len(p_dict['st_vj'][is_sane])
 
-  for i in range(0,len(p_dict.keys())):
-    p_dict[p_dict.keys()[i]] = p_dict[p_dict.keys()[i]][is_sane]
-  p_dict = vizier_find_mags(p_dict,search_radius)
-  p_dict = find_IR_mags(p_dict)
+#  for i in range(0,len(p_dict.keys())):
+#    p_dict[p_dict.keys()[i]] = p_dict[p_dict.keys()[i]][is_sane]
+
+  p_dict = vizier_find_mags(p_dict,search_radius,catalogs)
+  verbose = True
+  p_dict = find_IR_mags(p_dict,verbose=verbose)
   p_dict = calc_signal(p_dict)
   
   pickle.dump(p_dict, open( fname+".p", "wb" ) )
