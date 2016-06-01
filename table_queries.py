@@ -12,7 +12,6 @@ import astropy.units as u
 import astropy.coordinates as coord
 import pickle
 from sys import argv
-from IPython.display import clear_output
 
 # Get a file-like object for the Python Web site's home page.
 
