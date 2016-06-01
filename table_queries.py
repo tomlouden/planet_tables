@@ -12,6 +12,7 @@ import astropy.units as u
 import astropy.coordinates as coord
 import pickle
 from sys import argv
+from IPython.display import clear_output
 
 # Get a file-like object for the Python Web site's home page.
 
@@ -418,43 +419,101 @@ def calc_eqtemp(p_dict):
 
   return p_dict
 
+def try_calc_seps(p_dict,i,search_radius,v):
+  try:
+    result = v.query_object(p_dict['pl_hostname'][i],catalog=['UCAC'])
+    result = v.query_region(coord.ICRS(ra=p_dict['ra'][i],dec=p_dict['dec'][i], unit=(u.deg,u.deg)),radius=search_radius,catalog=['UCAC'])
+    viz_result = result['I/322A/out']
+    out_dict = {}
+    for key in viz_result.keys():
+      out_dict[key] = array(viz_result[key].filled(999).tolist())
+#      print out_dict['Bmag'], out_dict['Vmag']
+    out_dict['B-V'] = out_dict['Bmag'] - out_dict['Vmag']
+
+    search_ra = p_dict['ra'][i]*(pi/180.0)
+    search_dec = p_dict['dec'][i]*(pi/180.0)
+
+    sep_list = []
+    for x in range(0,len(out_dict['RAJ2000'])):
+      targ_ra = out_dict['RAJ2000'][x]*(pi/180.0)
+      targ_dec = out_dict['DEJ2000'][x]*(pi/180.0)      
+      sep = 60*(arccos(sin(targ_dec)*sin(search_dec) + cos(search_dec)*cos(targ_dec)*cos(search_ra - targ_ra)))*180.0/pi
+      sep_list += [sep]
+    out_dict['sep'] = sep_list
+
+    p_dict['nearby_objects'][i] = out_dict
+  except:
+    p_dict['nearby_objects'][i] = 'NO MATCHES!'
+  return p_dict 
+
+def find_IR_mags(p_dict,search_radius=0.05,verbose=False):
+
+  search_radius = str(search_radius)+"m"
+  maxjmag = 19
+  maxj = '<'+str(maxjmag)
+
+  nplanets = len(p_dict['pl_hostname'])
+
+  p_dict['st_jj'] = (p_dict['st_vj'].copy())*0.0
+  p_dict['st_hj'] = (p_dict['st_vj'].copy())*0.0
+  p_dict['st_kj'] = (p_dict['st_vj'].copy())*0.0
+
+  for i in range(0,nplanets):
+    v = Vizier(columns=['+_r','Jmag','Hmag','Kmag'],column_filters={"Jmag":maxj})
+    result = v.query_region(coord.ICRS(ra=p_dict['ra'][i],dec=p_dict['dec'][i], unit=(u.deg,u.deg)),radius=search_radius,catalog=['2MASS'])
+    viz_result = result['II/246/out']
+
+    jmag = viz_result['Jmag'][np.argsort(viz_result['_r'])[0]]
+    hmag = viz_result['Hmag'][np.argsort(viz_result['_r'])[0]]
+    kmag = viz_result['Kmag'][np.argsort(viz_result['_r'])[0]]
+
+    vmag = p_dict['st_vj'][i]
+
+    p_dict['st_jj'][i] = jmag
+    p_dict['st_hj'][i] = hmag
+    p_dict['st_kj'][i] = kmag
+
+    if verbose == True:
+      print p_dict['pl_name'][i], p_dict['ra'][i], p_dict['dec'][i]
+      print 100.0*i/len(p_dict['pl_hostname']),'%'
+      print 'best match', np.sort(viz_result['_r'])[0]
+      print 'J MAG:',jmag,' (vmag ',vmag,')'
+      print ''
+
+  return p_dict
+
 def vizier_find_mags(p_dict,search_radius):
+
+  max_delta_m = 1
 
   search_radius = str(search_radius)+"m"
 
   p_dict['nearby_objects'] = [[]]*len((p_dict['pl_hostname']))
 
-  v = Vizier(columns=['_RAJ2000', '_DEJ2000','B-V', 'Vmag','Bmag'],column_filters={"Vmag":"<14"})
   for i in range(0,len(p_dict['pl_hostname'])):
+    if p_dict['st_vj'][i] == 0:
+      maxv = '<'+str(19)
+    else:
+      maxv = '<'+str(p_dict['st_vj'][i] + max_delta_m)
+    v = Vizier(columns=['+_r','RAJ2000', 'DEJ2000','B-V', 'Vmag','Bmag'],column_filters={"Vmag":maxv})
+
     print p_dict['pl_name'][i], p_dict['ra'][i], p_dict['dec'][i]
-    result = v.query_object(p_dict['pl_hostname'][i],catalog=['UCAC'])
-    result = v.query_region(coord.ICRS(ra=p_dict['ra'][i],dec=p_dict['dec'][i], unit=(u.deg,u.deg)),radius=search_radius,catalog=['UCAC'])
     print 100.0*i/len(p_dict['pl_hostname']),'%'
-    try:
-      viz_result = result['I/322A/out']
-      out_dict = {}
-      for key in viz_result.keys():
-	out_dict[key] = array(viz_result[key].filled(999).tolist())
-      print out_dict['Bmag'], out_dict['Vmag']
-      out_dict['B-V'] = out_dict['Bmag'] - out_dict['Vmag']
 
+    p_dict = try_calc_seps(p_dict,i,search_radius,v)
+    print 'best match', np.sort(p_dict['nearby_objects'][i]['sep'])[0]
 
-      search_ra = p_dict['ra'][i]*(pi/180.0)
-      search_dec = p_dict['dec'][i]*(pi/180.0)
+#    print p_dict['nearby_objects'][i]
+#    if (p_dict['st_vj'][i] == 0) & (np.sort(p_dict['nearby_objects'][i]['sep'])[0] < 1):
+    newmag = p_dict['nearby_objects'][i]['Vmag'][np.argsort(p_dict['nearby_objects'][i]['sep'])[0]]
+    oldmag = p_dict['st_vj'][i]
+    p_dict['st_vj'][i] = newmag
+    print 'NEW MAG:',newmag,' (was ',oldmag,')'
+    maxv = '<'+str(p_dict['st_vj'][i] + max_delta_m)
+    v = Vizier(columns=['+_r','RAJ2000', 'DEJ2000','B-V', 'Vmag','Bmag'],column_filters={"Vmag":maxv})
+    p_dict = try_calc_seps(p_dict,i,search_radius,v)
 
-      sep_list = []
-      for x in range(0,len(out_dict['_RAJ2000'])):
-	targ_ra = out_dict['_RAJ2000'][x]*(pi/180.0)
-	targ_dec = out_dict['_DEJ2000'][x]*(pi/180.0)      
-	sep = 60*(arccos(sin(targ_dec)*sin(search_dec) + cos(search_dec)*cos(targ_dec)*cos(search_ra - targ_ra)))*180.0/pi
-	sep_list += [sep]
-      out_dict['sep'] = sep_list
-
-      p_dict['nearby_objects'][i] = out_dict
-    except:
-      p_dict['nearby_objects'][i] = 'NO MATCHES!'
-    print p_dict['nearby_objects'][i]
-
+    print ''
   return p_dict
 
 def simbad_find_mags(p_dict):
@@ -535,6 +594,7 @@ def create_dict(fname,declim,maglim,search_radius):
   for i in range(0,len(p_dict.keys())):
     p_dict[p_dict.keys()[i]] = p_dict[p_dict.keys()[i]][is_sane]
   p_dict = vizier_find_mags(p_dict,search_radius)
+  p_dict = find_IR_mags(p_dict)
   p_dict = calc_signal(p_dict)
   
   pickle.dump(p_dict, open( fname+".p", "wb" ) )
